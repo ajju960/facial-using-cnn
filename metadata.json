@@ -1,6 +1,6 @@
 {
   "name": "Facial Expression Recognition",
-  "description": "An advanced face detection and emotion classification app utilizing CameraX, ML Kit, and Gemini AI.",
+  "description": "An advanced face detection and emotion classification app utilizing CameraX, ML Kit, and on-device machine learning.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

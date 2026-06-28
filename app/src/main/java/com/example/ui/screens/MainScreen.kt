@@ -18,7 +18,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.BuildConfig
 import com.example.ui.viewmodel.EmotionViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -28,12 +27,6 @@ fun MainScreen(
     modifier: Modifier = Modifier
 ) {
     val activeTab by viewModel.activeTab.collectAsState()
-
-    // Check if Gemini API Key is configured
-    val isApiKeyConfigured = remember {
-        val key = BuildConfig.GEMINI_API_KEY
-        key.isNotEmpty() && key != "MY_GEMINI_API_KEY"
-    }
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -74,13 +67,13 @@ fun MainScreen(
                                 Box(
                                     modifier = Modifier
                                         .background(
-                                            if (isApiKeyConfigured) Color(0xFF6750A4) else Color(0xFFFFB300),
+                                            Color(0xFF4CAF50),
                                             CircleShape
                                         )
                                         .size(6.dp)
                                 )
                                 Text(
-                                    text = if (isApiKeyConfigured) "Gemini Cloud Active" else "Local Inference Active",
+                                    text = "Local ML Core Active",
                                     color = Color(0xFF49454F),
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.Medium

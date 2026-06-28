@@ -216,7 +216,7 @@ fun GalleryScreen(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
-                        imageVector = if (engineUseLocal) Icons.Default.SettingsCell else Icons.Default.Cloud,
+                        imageVector = if (engineUseLocal) Icons.Default.SettingsCell else Icons.Default.Face,
                         contentDescription = "Engine Type",
                         tint = if (engineUseLocal) Color(0xFFFFB300) else Color(0xFF6750A4),
                         modifier = Modifier.size(20.dp)
@@ -224,13 +224,13 @@ fun GalleryScreen(
                     Spacer(modifier = Modifier.width(10.dp))
                     Column {
                         Text(
-                            text = if (engineUseLocal) "Offline Analyzer" else "Gemini Cognitive AI",
+                            text = if (engineUseLocal) "Offline Analyzer" else "On-Device ML",
                             color = Color(0xFF1C1B1F),
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = if (engineUseLocal) "Fast on-device landmarks simulation" else "Cloud multimodal emotional mapping",
+                            text = if (engineUseLocal) "Fast rule-based landmarks simulation" else "High-precision ML Kit Face Detection",
                             color = Color(0xFF49454F),
                             fontSize = 11.sp
                         )

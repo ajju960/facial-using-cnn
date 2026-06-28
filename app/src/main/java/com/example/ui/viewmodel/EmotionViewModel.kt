@@ -148,10 +148,35 @@ class EmotionViewModel(application: Application) : AndroidViewModel(application)
     }
 
     private suspend fun saveResultToDatabase(bitmap: Bitmap, result: EmotionAnalysisResult) {
-        // Compress bitmap to base64 for easy database visual recovery
+        // Downscale bitmap if it's too large to prevent OutOfMemory and SQLite Cursor Window allocation failures
+        val maxDimension = 360
+        val scaledBitmap = if (bitmap.width > maxDimension || bitmap.height > maxDimension) {
+            val ratio = bitmap.width.toFloat() / bitmap.height.toFloat()
+            val (newWidth, newHeight) = if (bitmap.width > bitmap.height) {
+                maxDimension to (maxDimension / ratio).toInt()
+            } else {
+                (maxDimension * ratio).toInt() to maxDimension
+            }
+            try {
+                Bitmap.createScaledBitmap(bitmap, newWidth.coerceAtLeast(1), newHeight.coerceAtLeast(1), true)
+            } catch (e: Exception) {
+                bitmap
+            }
+        } else {
+            bitmap
+        }
+
         val outputStream = ByteArrayOutputStream()
-        bitmap.compress(Bitmap.CompressFormat.JPEG, 40, outputStream)
+        scaledBitmap.compress(Bitmap.CompressFormat.JPEG, 60, outputStream)
         val base64 = Base64.encodeToString(outputStream.toByteArray(), Base64.NO_WRAP)
+
+        if (scaledBitmap != bitmap) {
+            try {
+                scaledBitmap.recycle()
+            } catch (e: Exception) {
+                // ignore recycle failure
+            }
+        }
 
         val breakdownJson = try {
             mapAdapter.toJson(result.emotionBreakdown ?: emptyMap())

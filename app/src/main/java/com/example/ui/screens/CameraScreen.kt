@@ -17,6 +17,8 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -24,7 +26,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
 import com.example.data.remote.EmotionAnalysisResult
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -66,6 +67,7 @@ fun CameraScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     val cameraAnalysisState by viewModel.cameraAnalysisState.collectAsState()
     val capturedBitmap by viewModel.capturedBitmap.collectAsState()
+    var useLocalAnalysis by remember { mutableStateOf(false) }
 
     var hasCameraPermission by remember {
         mutableStateOf(
@@ -90,7 +92,6 @@ fun CameraScreen(
     }
 
     // CameraX setups
-    val previewView = remember { PreviewView(context) }
     val imageCapture = remember { ImageCapture.Builder().build() }
     val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
 
@@ -110,35 +111,64 @@ fun CameraScreen(
                 .padding(paddingValues)
         ) {
             if (hasCameraPermission) {
-                if (capturedBitmap == null) {
-                    // CAMERA PREVIEW MODE
-                    Box(modifier = Modifier.fillMaxSize()) {
-                        AndroidView(
-                            factory = { ctx ->
-                                val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
-                                cameraProviderFuture.addListener({
+                Box(modifier = Modifier.fillMaxSize()) {
+                    var localCameraProvider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
+                    val previewView = remember { PreviewView(context) }
+
+                    // Dynamically bind/unbind CameraX based on whether we are in preview mode or viewing results
+                    LaunchedEffect(capturedBitmap, hasCameraPermission, lifecycleOwner) {
+                        if (hasCameraPermission) {
+                            val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
+                            cameraProviderFuture.addListener({
+                                try {
                                     val cameraProvider = cameraProviderFuture.get()
-                                    val preview = Preview.Builder().build().also {
-                                        it.setSurfaceProvider(previewView.surfaceProvider)
+                                    localCameraProvider = cameraProvider
+                                    val isBound = cameraProvider.isBound(imageCapture)
+                                    
+                                    if (capturedBitmap == null) {
+                                        if (!isBound) {
+                                            val preview = Preview.Builder().build().also {
+                                                it.setSurfaceProvider(previewView.surfaceProvider)
+                                            }
+                                            cameraProvider.bindToLifecycle(
+                                                lifecycleOwner,
+                                                CameraSelector.DEFAULT_FRONT_CAMERA,
+                                                preview,
+                                                imageCapture
+                                            )
+                                        }
+                                    } else {
+                                        if (isBound) {
+                                            cameraProvider.unbindAll()
+                                        }
                                     }
+                                } catch (exc: Exception) {
+                                    Log.e("CameraScreen", "Lifecycle binding/unbinding failed", exc)
+                                }
+                            }, ContextCompat.getMainExecutor(context))
+                        }
+                    }
 
-                                    try {
-                                        cameraProvider.unbindAll()
-                                        cameraProvider.bindToLifecycle(
-                                            lifecycleOwner,
-                                            CameraSelector.DEFAULT_FRONT_CAMERA,
-                                            preview,
-                                            imageCapture
-                                        )
-                                    } catch (exc: Exception) {
-                                        Log.e("CameraScreen", "Use case binding failed", exc)
-                                    }
-                                }, ContextCompat.getMainExecutor(ctx))
-                                previewView
-                            },
-                            modifier = Modifier.fillMaxSize()
-                        )
+                    DisposableEffect(Unit) {
+                        onDispose {
+                            try {
+                                if (localCameraProvider?.isBound(imageCapture) == true) {
+                                    localCameraProvider?.unbindAll()
+                                }
+                            } catch (e: Exception) {
+                                Log.e("CameraScreen", "Failed to unbind camera provider on dispose", e)
+                            }
+                        }
+                    }
 
+                    // Keep PreviewView rendered to avoid surface destruction race conditions
+                    AndroidView(
+                        factory = { previewView },
+                        modifier = Modifier.fillMaxSize()
+                    )
+
+                    if (capturedBitmap == null) {
+                        // CAMERA PREVIEW MODE OVERLAYS
                         // Glowing high-tech face scan overlay
                         FaceScanGridOverlay()
 
@@ -189,20 +219,18 @@ fun CameraScreen(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 // Local Simulation Switch
-                                var useLocalAnalysis by remember { mutableStateOf(false) }
-
                                 Column(
                                     horizontalAlignment = Alignment.CenterHorizontally,
                                     modifier = Modifier.clickable { useLocalAnalysis = !useLocalAnalysis }
                                 ) {
                                     Icon(
-                                        imageVector = if (useLocalAnalysis) Icons.Default.SettingsCell else Icons.Default.CloudQueue,
+                                        imageVector = if (useLocalAnalysis) Icons.Default.SettingsCell else Icons.Default.Face,
                                         contentDescription = "Analysis Engine",
                                         tint = if (useLocalAnalysis) Color(0xFFFFB300) else Color(0xFF6750A4),
                                         modifier = Modifier.size(24.dp)
                                     )
                                     Text(
-                                        text = if (useLocalAnalysis) "Offline" else "Gemini AI",
+                                        text = if (useLocalAnalysis) "Heuristics" else "On-Device ML",
                                         color = if (useLocalAnalysis) Color(0xFFFFB300) else Color(0xFF6750A4),
                                         fontSize = 10.sp,
                                         fontWeight = FontWeight.Bold,
@@ -271,11 +299,8 @@ fun CameraScreen(
                                 }
                             }
                         }
-                    }
-                } else {
-                    // CAPTURED & ANALYZING MODE
-                    Box(modifier = Modifier.fillMaxSize()) {
-                        // Display Captured Image
+                    } else {
+                        // Display Captured Image (completely covers the background preview)
                         Image(
                             bitmap = capturedBitmap!!.asImageBitmap(),
                             contentDescription = "Captured Frame",
@@ -351,7 +376,8 @@ fun CameraScreen(
                                         val result = (cameraAnalysisState as AnalysisUiState.Success).result
                                         ExpressionDetailsView(
                                             result = result,
-                                            onRecapture = { viewModel.clearCameraState() }
+                                            onRecapture = { viewModel.clearCameraState() },
+                                            modifier = Modifier.verticalScroll(rememberScrollState())
                                         )
                                     }
                                     is AnalysisUiState.Error -> {
@@ -359,7 +385,7 @@ fun CameraScreen(
                                         AnalysisErrorView(
                                             message = errorMsg,
                                             onRetry = {
-                                                viewModel.analyzeCameraFrame(capturedBitmap!!, false)
+                                                viewModel.analyzeCameraFrame(capturedBitmap!!, useLocalAnalysis)
                                             },
                                             onCancel = { viewModel.clearCameraState() }
                                         )
@@ -533,7 +559,7 @@ fun AnalyzingLoadingView() {
                 "Running structural landmark match...",
                 "Calculating facial muscle contractions...",
                 "Mapping micro-expressions to standard categories...",
-                "Querying Gemini cognitive engine..."
+                "Executing on-device neural classifier..."
             )
             var index = 0
             while (true) {
@@ -555,113 +581,107 @@ fun AnalyzingLoadingView() {
 @Composable
 fun ExpressionDetailsView(
     result: EmotionAnalysisResult,
-    onRecapture: () -> Unit
+    onRecapture: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
+    Column(
+        modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        item {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text(
+                    text = "PRIMARY EMOTION",
+                    color = Color(0xFF49454F),
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.sp
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = result.primaryEmotion ?: "Neutral",
+                    color = getEmotionColor(result.primaryEmotion ?: "Neutral"),
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.Black
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .background(
+                        color = getEmotionColor(result.primaryEmotion ?: "Neutral").copy(alpha = 0.12f),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                    .border(
+                        width = 1.dp,
+                        color = getEmotionColor(result.primaryEmotion ?: "Neutral").copy(alpha = 0.25f),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+            ) {
+                Text(
+                    text = "Confidence: ${String.format("%.0f", (result.confidence ?: 0.0) * 100)}%",
+                    color = getEmotionColor(result.primaryEmotion ?: "Neutral"),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+
+        // Micro-expression Tag
+        Card(
+            colors = CardDefaults.cardColors(containerColor = Color(0xFFF3EDF7)),
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier
+                    .padding(16.dp)
+                    .fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                Icon(
+                    imageVector = Icons.Default.Psychology,
+                    contentDescription = "Cognitive landmark",
+                    tint = Color(0xFF21005D),
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(12.dp))
                 Column {
                     Text(
-                        text = "PRIMARY EMOTION",
+                        text = "MICRO-EXPRESSION MARK",
                         color = Color(0xFF49454F),
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 1.sp
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold
                     )
-                    Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = result.primaryEmotion ?: "Neutral",
-                        color = getEmotionColor(result.primaryEmotion ?: "Neutral"),
-                        fontSize = 28.sp,
-                        fontWeight = FontWeight.Black
-                    )
-                }
-
-                Box(
-                    modifier = Modifier
-                        .background(
-                            color = getEmotionColor(result.primaryEmotion ?: "Neutral").copy(alpha = 0.12f),
-                            shape = RoundedCornerShape(12.dp)
-                        )
-                        .border(
-                            width = 1.dp,
-                            color = getEmotionColor(result.primaryEmotion ?: "Neutral").copy(alpha = 0.25f),
-                            shape = RoundedCornerShape(12.dp)
-                        )
-                        .padding(horizontal = 16.dp, vertical = 8.dp)
-                ) {
-                    Text(
-                        text = "Confidence: ${String.format("%.0f", (result.confidence ?: 0.0) * 100)}%",
-                        color = getEmotionColor(result.primaryEmotion ?: "Neutral"),
-                        fontSize = 13.sp,
+                        text = result.microExpressionTag ?: "Unknown Contraction",
+                        color = Color(0xFF1C1B1F),
+                        fontSize = 15.sp,
                         fontWeight = FontWeight.Bold
                     )
                 }
             }
         }
 
-        // Micro-expression Tag
-        item {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = Color(0xFFF3EDF7)),
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier
-                        .padding(16.dp)
-                        .fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Psychology,
-                        contentDescription = "Cognitive landmark",
-                        tint = Color(0xFF21005D),
-                        modifier = Modifier.size(24.dp)
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Column {
-                        Text(
-                            text = "MICRO-EXPRESSION MARK",
-                            color = Color(0xFF49454F),
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = result.microExpressionTag ?: "Unknown Contraction",
-                            color = Color(0xFF1C1B1F),
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
-            }
-        }
-
         // Emotion Breakdown
-        item {
-            Text(
-                text = "EMOTION WEIGHT MATRIX",
-                color = Color(0xFF49454F),
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 1.sp,
-                modifier = Modifier.padding(top = 8.dp)
-            )
-        }
+        Text(
+            text = "EMOTION WEIGHT MATRIX",
+            color = Color(0xFF49454F),
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 1.sp,
+            modifier = Modifier.padding(top = 8.dp)
+        )
 
         val breakdown = result.emotionBreakdown ?: emptyMap()
         if (breakdown.isNotEmpty()) {
             val sortedBreakdown = breakdown.entries.sortedByDescending { it.value }
-            items(sortedBreakdown.size) { index ->
-                val entry = sortedBreakdown[index]
+            sortedBreakdown.forEach { entry ->
                 val emotion = entry.key
                 val percentage = entry.value
 
@@ -701,98 +721,90 @@ fun ExpressionDetailsView(
                 }
             }
         } else {
-            item {
-                Text("No weights calculated", color = Color.Gray, fontSize = 12.sp)
-            }
+            Text("No weights calculated", color = Color.Gray, fontSize = 12.sp)
         }
 
         // AI Insight
-        item {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(Color(0xFFF3EDF7), RoundedCornerShape(16.dp))
-                    .border(1.dp, Color(0x1F79747E), RoundedCornerShape(16.dp))
-                    .padding(16.dp)
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.Info,
-                        contentDescription = "AI Insight",
-                        tint = Color(0xFF21005D),
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "AI COGNITIVE INSIGHT",
-                        color = Color(0xFF21005D),
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-                Spacer(modifier = Modifier.height(6.dp))
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFFF3EDF7), RoundedCornerShape(16.dp))
+                .border(1.dp, Color(0x1F79747E), RoundedCornerShape(16.dp))
+                .padding(16.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Info,
+                    contentDescription = "AI Insight",
+                    tint = Color(0xFF21005D),
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = result.aiInsight ?: "Neutral profile detected without landmarks.",
-                    color = Color(0xFF1C1B1F),
-                    fontSize = 14.sp,
-                    lineHeight = 20.sp
+                    text = "AI COGNITIVE INSIGHT",
+                    color = Color(0xFF21005D),
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold
                 )
             }
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = result.aiInsight ?: "Neutral profile detected without landmarks.",
+                color = Color(0xFF1C1B1F),
+                fontSize = 14.sp,
+                lineHeight = 20.sp
+            )
         }
 
         // Mood booster recommendation
-        item {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(Color(0xFFFDF8F6), RoundedCornerShape(16.dp))
-                    .border(1.dp, Color(0x1F79747E), RoundedCornerShape(16.dp))
-                    .padding(16.dp)
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.Lightbulb,
-                        contentDescription = "Recommendation",
-                        tint = Color(0xFF21005D),
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "RECOMMENDED ACTION",
-                        color = Color(0xFF21005D),
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-                Spacer(modifier = Modifier.height(6.dp))
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFFFDF8F6), RoundedCornerShape(16.dp))
+                .border(1.dp, Color(0x1F79747E), RoundedCornerShape(16.dp))
+                .padding(16.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Lightbulb,
+                    contentDescription = "Recommendation",
+                    tint = Color(0xFF21005D),
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = result.moodBoosterTip ?: "Take a moment to align your focus and posture.",
-                    color = Color(0xFF1C1B1F),
-                    fontSize = 14.sp,
-                    lineHeight = 20.sp
+                    text = "RECOMMENDED ACTION",
+                    color = Color(0xFF21005D),
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold
                 )
             }
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = result.moodBoosterTip ?: "Take a moment to align your focus and posture.",
+                color = Color(0xFF1C1B1F),
+                fontSize = 14.sp,
+                lineHeight = 20.sp
+            )
         }
 
         // Action Buttons
-        item {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            OutlinedButton(
+                onClick = onRecapture,
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF6750A4)),
+                border = BorderStroke(1.dp, Color(0xFF6750A4)),
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(12.dp)
             ) {
-                OutlinedButton(
-                    onClick = onRecapture,
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF6750A4)),
-                    border = BorderStroke(1.dp, Color(0xFF6750A4)),
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Icon(Icons.Default.Refresh, contentDescription = "Scan Again", tint = Color(0xFF6750A4))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("SCAN AGAIN", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                }
+                Icon(Icons.Default.Refresh, contentDescription = "Scan Again", tint = Color(0xFF6750A4))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("SCAN AGAIN", fontSize = 12.sp, fontWeight = FontWeight.Bold)
             }
         }
     }
